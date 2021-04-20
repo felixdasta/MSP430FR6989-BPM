@@ -121,7 +121,7 @@ detectPulse:
 
         MOV.B   #4, R4                   ; having 4 in R4 implies that we're taking your pulse
 
-        MOV.B   #00011000B, &0xA31       ; display battery brackets
+        MOV.B   #00010000B, &0xA31       ; display battery brackets
 
         JMP     fin
         
