@@ -6,7 +6,14 @@
                                         ; outside this module
 
         ORG     1C00h                   ; RAM init
-counter db      0                       ; increase by 1 every 0.1 seconds
+bpm     dw      0x0                     ; initial bpm count
+seconds dw      0x0                     ; initial read elapsed seconds       
+counter dw      0x0                     ; increase by 1 every 0.1 seconds
+;display values
+display db  0x09, 0x05, 0x03, 0x12, 0x0E, 0x07 
+;digits                   0       1       2       3       4       5       6       7       8       9
+digitH          db      0xFC,   0x60,   0xDB,   0xF3,   0x67,   0xB7,   0xBF,   0x80,   0xFF,   0xF7
+digitL          db      0x28,   0x20,   0x00,   0x00,   0x00,   0x00,   0x00,   0x28,   0x00,   0x00
 
         ORG     0FFE8h                  ; vector for TIMER_A0
         DC16    TIMER_A0_ISR            ; set vector for 'TIMER_A0_ISR' routine
@@ -31,8 +38,6 @@ main:   NOP                             ; main program
         MOV.B   #0, R5                  ; R5 will represent the heart state
         MOV.B   #16, R6                 ; R6 will be used to increase battery counter
         MOV.B   #1, R7                  ; R7 will determine if we will increase odd or even battery pile (1 == odd, 0 == even)
-        MOV.B   #0, R8                  ; R8 will determine BPM count
-
 
         ;Enable LCD segments 0-21; 26-43
         MOV.W   #0xffff, &LCDCPCTL0
@@ -139,28 +144,131 @@ displayLog:
 
         JMP     fin
         
+calculateAverageBPM:
+        PUSH.W  R8
+        PUSH.W  R9
+        
+        MOV.B   &seconds, R9             ; move current time in seconds to the division denominator
+        DEC.B   R9                       ; decrease R9 because the average BPM is going to be based
+                                         ; on previous second
+
+        MOV.B   #60, R8                  ; move 60 to the division numerator (we're going to calculate the average BPM based on 60 seconds)
+        MOV.B   #0, R10                  ; reset R10 value
+
+        CALL    #divide                  ; divide number
+        
+        PUSH.W  R8
+        
+        MOV.W   &bpm, R8                 ; current button presses
+        MOV.B   R10, R9                  ; division result
+        MOV.B   #0, R10                  ; reset R10
+                
+        PUSH.W  R9
+        
+        CALL    #multiplication
+        
+        POP     R9
+        POP     R8
+        
+        CALL    #bpmRemainder
+        CALL    #startDecode
+        
+        POP     R9
+        POP     R8
+        
+        RET
+        
+bpmRemainder:
+        CMP.B   #0, R8                    ; did the division result had a remainder?
+        JZ      return                    ; if not, then return
+        MOV.B   &bpm, R8                  ; current button presses
+        CALL    #divide                   ; divide number
+        RET
+
+multiplication:
+        ADD     R8,R10                    ; Ex.    R10 -> R10 + R8 
+        DEC     R9                        ; decrease R9
+        JNZ     multiplication            ; if R9 == 0, we have finished multiplying  
+        RET
+        
+divide:
+        CMP.W   R9, R8                    ; is R8 >= R9?
+        JGE     increaseDivResult         ; if so, increase the division result
+        RET                               ; we have finished division      
+increaseDivResult: 
+        SUB.W   R9, R8                    ; Ex.    R8 -> R8 - R9 
+        INC.B   R10                       ; Add 1 to R10
+        JMP     divide
+        
+startDecode:
+        //push the following registers into the stack to avoid scondary effects
+        MOV.B   #11110001B,&0xA32         ; display B (opHigh)
+        MOV.B   #01010000B,&0xA33         ; display B (opLow)
+        
+        MOV.B   #11001111B,&0xA2E         ; display P (opHigh)
+        
+        MOV.B   #01101100B,&0xA27         ; display M (opHigh)
+        MOV.B   #10100000B,&0xA28         ; display M (opLow)
+        
+        PUSH.B  R5                        ; push R5 to avoid secondary effects
+        PUSH.B  R8
+        PUSH.B  R9
+        PUSH.B  R10
+        
+        MOV     #2, R5                    ; 3th index of the display array, let's start showing the decoded value from right to left
+decodeValue:
+        MOV.W   R10, R8                   ; move the result to the numerator (R8 will be used as the numerator to divide)
+        MOV.W   #0, R10                   ; R10 will store the division result, right now is 0
+        MOV.W   #10, R9                   ; we're going to divide the result by 10 to start decoding the number in the screen
+
+        CALL    #divide                   ; divide R8/R9, where R9 = 10
+
+        PUSH.W  R5                        ; push R5 to avoid secondary effects
+
+        MOV.B   display(R5), R5           ; the display memory location will be stored in R5
+        MOV.B   digitH(R8), 0xA20(R5)     ; activate the digitH segment of the number stored in R9
+        MOV.B   digitL(R8), 0xA20+1(R5)   ; activate the digitL segment of the number stored in R9
+
+        POP     R5                        ; pop R5 to avoid secondary effects
+
+
+        DEC    R5                         ; pass to the next display
+        
+        CMP     #0, R5                    ; is the division result == 0?
+        JGE      decodeValue              ; if not, decode the next value
+        //pop the following registers from the stack to restore their original value
+        POP     R10
+        POP     R9
+        POP     R8
+        POP     R5                        ; pop R5 to restore previous value
+
+        RET 
+        
+return:
+        RET      
+        
 detectPulse:
-        MOV.W   #2, &LCDCMEMCTL          ; clear lcd memory
-        BIS.W   #CCIE, &TA0CCTL0         ; activate timer interrupt
+        MOV.W   #2, &LCDCMEMCTL           ; clear lcd memory
+        BIS.W   #CCIE, &TA0CCTL0          ; activate timer interrupt
 
-        MOV.B   #4, R4                   ; having 4 in R4 implies that we're taking your pulse
+        MOV.B   #4, R4                    ; having 4 in R4 implies that we're taking your pulse
 
-        MOV.B   R6, &0xA31               ; display battery brackets
+        MOV.B   R6, &0xA31                ; display battery brackets
 
         JMP     fin
         
 increasePulse:
-        MOV.B   #2, R5                   ; having a 2 in R5 implies that after two timer interrupts,
-                                         ; the heart will be turned off
-        INC     R8                       ; increase button presses
+        MOV.B   #2, R5                    ; having a 2 in R5 implies that after two timer interrupts,
+                                          ; the heart will be turned off
+        INC.W   &bpm                      ; increase button presses
 
         JMP     fin
 
 buttonPress:        
-        BIT.B   #00000010B, &P1IFG       ; was left button pressed?
-        JNZ     leftButtonPress          ; then let's determine which operation to do
-        BIT.B   #00000100B, &P1IFG       ; was right button pressed?
-        JNZ     rightButtonPress         ; then let's determine which operation to do
+        BIT.B   #00000010B, &P1IFG        ; was left button pressed?
+        JNZ     leftButtonPress           ; then let's determine which operation to do
+        BIT.B   #00000100B, &P1IFG        ; was right button pressed?
+        JNZ     rightButtonPress          ; then let's determine which operation to do
 
         JMP     fin
         
@@ -178,6 +286,7 @@ increaseCounter:
         
 increaseBattery:       
         MOV.B   #0, counter              ; reset counter to 0
+        INC.B   &seconds
 
         CMP.B   #224, &0xA2D             ; is the battery already full?
         JZ      resetBattery             ; then reset it!       
@@ -196,10 +305,11 @@ impar:
         RET
         
 resetBattery:
-        MOV.B   #16, R6                 ; R6 default value
-        MOV.B   #1, R7                  ; R7 default value
-        MOV.B   R6, &0xA31              ; clear battery pile
-        MOV.B   #0, &0xA2D              ; clear battery pile
+        CALL    #calculateAverageBPM    ; calculate the avergae BPM at the moment
+        MOV.B   #32, R6                 ; R6 reset value
+        MOV.B   #0, R7                  ; R7 reset value
+        MOV.B   #48, &0xA31             ; only one battery pile
+        MOV.B   #0, &0xA2D              ; no par battery at the moment
         RET
 
 checkHeartTime:
