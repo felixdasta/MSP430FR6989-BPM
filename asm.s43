@@ -14,6 +14,9 @@
                                         ; is stored at address 0FFDAh of the
                                         ; Interrupt Vector Table (IVT).
 
+        MOV.B   #0, R5                  ;Setting Register 5 to use as counter
+                                        ; for 30 pulse readings
+
         ORG     0FFFEh
         DC16    init                    ; set reset vector to 'init' label
 
@@ -142,6 +145,10 @@ increasePulse:
 
         MOV.B   #4, &0xA22               ; turn on heart
 
+        MOV     #62500, &TA0CCR0        ; Set timer capture compare register 0
+        CMP.B   #30, R5           ;compares times pulse read
+        JNZ     increaseBars            ; if R5 NOT 30, then increases bar counters
+
         BIS.W   #CCIE, &TA0CCTL0         ; activate timer interrupt
         JMP     fin
 
@@ -149,7 +156,7 @@ buttonPress:
         BIT.B   #00000010B, &P1IFG       ;was left button pressed?
         JNZ     leftButtonPress          ;then let's determine which operation to do
         BIT.B   #00000100B, &P1IFG       ;was right button pressed?
-        JNZ      rightButtonPress        ;then let's determine which operation to do
+        JNZ     rightButtonPress        ;then let's determine which operation to do
 
         JMP     fin
         
@@ -172,6 +179,53 @@ rightButtonPress:
         JZ      displayLog               ;if so, display log
         CMP.B   #3, R4                   ;are we in the log menu?
         JZ      displayRead              ;if so, display read
+
+increaseBars:
+        CMP.B   #00010000B, &0xA31
+        JZ      increaseFirstBar
+        CMP.B   #00000000B, &0xA2D
+        JZ      increaseSecondBar
+        CMP.B   #00110000B, &0xA31
+        JZ      increaseThirdBar
+        CMP.B   #00100000B, &0xA2D
+        JZ      increaseFourthBar
+        CMP.B   #01110000B, &0xA31
+        JZ      increaseFifthBar
+        CMP.B   #01100000B, &0xA2D
+        JZ      increaseSixthBar
+        CMP.B   #11100000B, &0xA2D
+        JZ      increaseFirstBar
+        RETI
+increaseFirstBar:
+        ADD.B   #1, R5
+        MOV.B   #00110000B, &0xA31
+        MOV.B   #00000000B, &0xA2D
+        RETI
+increaseSecondBar:
+        ADD.B   #1, R5
+        MOV.B   #00110000B, &0xA31
+        MOV.B   #00100000B, &0xA2D
+        RETI
+increaseThirdBar:
+        ADD.B   #1, R5
+        MOV.B   #01110000B, &0xA31
+        MOV.B   #00100000B, &0xA2D
+        RETI
+increaseFourthBar:
+        ADD.B   #1, R5
+        MOV.B   #01110000B, &0xA31
+        MOV.B   #01100000B, &0xA2D
+        RETI
+increaseFifthBar:
+        ADD.B   #1, R5
+        MOV.B   #11110000B, &0xA31
+        MOV.B   #01100000B, &0xA2D
+        RETI
+increaseSixthBar:
+        ADD.B   #1, R5
+        MOV.B   #11110000B, &0xA31
+        MOV.B   #11100000B, &0xA2D
+        RETI
 
 fin:
         BIC.B   #00000110B, &P1IFG
