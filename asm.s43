@@ -5,6 +5,9 @@
         PUBLIC  main                    ; make the main label visible
                                         ; outside this module
 
+        ORG     1C00h                   ; RAM init
+counter db      0                       ; increase by 1 every 0.1 seconds
+
         ORG     0FFE8h                  ; vector for TIMER_A0
         DC16    TIMER_A0_ISR            ; set vector for 'TIMER_A0_ISR' routine
 
@@ -13,9 +16,6 @@
                                         ; be serviced by routine which address
                                         ; is stored at address 0FFDAh of the
                                         ; Interrupt Vector Table (IVT).
-
-        MOV.B   #0, R5                  ;Setting Register 5 to use as counter
-                                        ; for 30 pulse readings
 
         ORG     0FFFEh
         DC16    init                    ; set reset vector to 'init' label
@@ -28,14 +28,34 @@ init:   MOV     #SFE(CSTACK), SP        ; set up stack
 main:   NOP                             ; main program
         MOV.W   #WDTPW+WDTHOLD,&WDTCTL  ; Stop watchdog timer
 
+        MOV.B   #0, R5                  ; R5 will represent the heart state
+        MOV.B   #16, R6                 ; R6 will be used to increase battery counter
+        MOV.B   #1, R7                  ; R7 will determine if we will increase odd or even battery pile (1 == odd, 0 == even)
+        MOV.B   #0, R8                  ; R8 will determine BPM count
+
+
         ;Enable LCD segments 0-21; 26-43
         MOV.W   #0xffff, &LCDCPCTL0
         MOV.W   #0xfc3f, &LCDCPCTL1
         MOV.W   #0x0fff, &LCDCPCTL2
         
-UnlockGPIO:                               ;disable the GPIO power-on default
-        BIC.W   #LOCKLPM5, &PM5CTL0       ;high-impedance mode to activate
-                                          ;previously configured port settings
+UnlockGPIO:                                   ;disable the GPIO power-on default
+        BIC.W   #LOCKLPM5, &PM5CTL0           ;high-impedance mode to activate
+                                              ;previously configured port settings
+
+        MOV     #TASSEL_2+MC_1+ID_1, &TA0CTL  ;Set timer according to next table
+	NOP
+        ; Uses SMCLK and up mode
+        ; TASSELx        MCx (mode control)                IDx (input divider)
+        ; 00 -> TACLK    00 -> Stop                        00 -> /1
+        ; 01 -> ACLK     01 -> Up mode (up to TACCR0)      01 -> /2
+        ; 10 -> SMCLK    10 -> Continuous (up to 0FFFFh)   10 -> /4
+        ; 11 -> INCLK    11 -> Up/down (top on TACCR0)     11 -> /8
+
+        ; period = cycles * divider / SMLCK
+        ; Assuming SMLCK = 1 MHz, divider = 2 and period = 0.1 seg
+        ; cycles = 50000.  With period = 0.1
+        MOV     #50000, &TA0CCR0        ; Set the timer capture compare register 0
 
         BIC.B   #00000110B, &P1IFG      ; To erase a flag raised before
                                         ; activating the GIE. This help to
@@ -121,49 +141,79 @@ displayLog:
         
 detectPulse:
         MOV.W   #2, &LCDCMEMCTL          ; clear lcd memory
+        BIS.W   #CCIE, &TA0CCTL0         ; activate timer interrupt
 
         MOV.B   #4, R4                   ; having 4 in R4 implies that we're taking your pulse
 
-        MOV.B   #00010000B, &0xA31       ; display battery brackets
+        MOV.B   R6, &0xA31               ; display battery brackets
 
         JMP     fin
         
 increasePulse:
-        MOV     #TASSEL_2+MC_1+ID_2, &TA0CTL  ;Set timer according to next table
-	NOP
-        ; Uses SMCLK and up mode
-        ; TASSELx        MCx (mode control)                IDx (input divider)
-        ; 00 -> TACLK    00 -> Stop                        00 -> /1
-        ; 01 -> ACLK     01 -> Up mode (up to TACCR0)      01 -> /2
-        ; 10 -> SMCLK    10 -> Continuous (up to 0FFFFh)   10 -> /4
-        ; 11 -> INCLK    11 -> Up/down (top on TACCR0)     11 -> /8
+        MOV.B   #2, R5                   ; having a 2 in R5 implies that after two timer interrupts,
+                                         ; the heart will be turned off
+        INC     R8                       ; increase button presses
 
-        ; period = cycles * divider / SMLCK
-        ; Assuming SMLCK = 1 MHz, divider = 8 and period = 0.2 seg
-        ; cycles = 25000.  With period = 0.2
-        MOV     #50000, &TA0CCR0        ; Set the timer capture compare register 0
-
-        MOV.B   #4, &0xA22               ; turn on heart
-
-        MOV     #62500, &TA0CCR0        ; Set timer capture compare register 0
-        CMP.B   #30, R5           ;compares times pulse read
-        JNZ     increaseBars            ; if R5 NOT 30, then increases bar counters
-
-        BIS.W   #CCIE, &TA0CCTL0         ; activate timer interrupt
         JMP     fin
 
 buttonPress:        
-        BIT.B   #00000010B, &P1IFG       ;was left button pressed?
-        JNZ     leftButtonPress          ;then let's determine which operation to do
-        BIT.B   #00000100B, &P1IFG       ;was right button pressed?
-        JNZ     rightButtonPress        ;then let's determine which operation to do
+        BIT.B   #00000010B, &P1IFG       ; was left button pressed?
+        JNZ     leftButtonPress          ; then let's determine which operation to do
+        BIT.B   #00000100B, &P1IFG       ; was right button pressed?
+        JNZ     rightButtonPress         ; then let's determine which operation to do
 
         JMP     fin
         
 TIMER_A0_ISR:
-        MOV.B   #0, &0xA22               ; turn off heart
+        CALL    #checkHeartTime
+        CALL    #increaseCounter
 
         RETI
+        
+increaseCounter:
+        INC     counter
+        CMP     #10, counter             ; is counter == 10?
+        JZ      increaseBattery
+        RET
+        
+increaseBattery:       
+        MOV.B   #0, counter              ; reset counter to 0
+
+        CMP.B   #224, &0xA2D             ; is the battery already full?
+        JZ      resetBattery             ; then reset it!       
+        
+        CMP.B   #1, R7                   ; should we increase odd or even value?
+        JZ      impar                    ; if previous condition is true, increase odd value!
+par:        
+        ADD.B   R6, &0xA2D               ; pass the value in R5 to the even position
+        MOV.B   #1, R7                   ; next move will be an odd battery pile
+        RET
+        
+impar:
+        ADD.B   R6, R6                   ; multiply R6 * 2
+        ADD.B   R6, &0xA31               ; pass the value in R5 to the odd position
+        MOV.B   #0, R7                   ; next move will be an even battery pile
+        RET
+        
+resetBattery:
+        MOV.B   #16, R6                 ; R6 default value
+        MOV.B   #1, R7                  ; R7 default value
+        MOV.B   R6, &0xA31              ; clear battery pile
+        MOV.B   #0, &0xA2D              ; clear battery pile
+        RET
+
+checkHeartTime:
+        CMP.B   #0, R5                   ; is R5 == 0?
+        JEQ     turnOffHeart             ; if so? then turn off the heart!
+
+        DEC     R5                       ; if not, then dec R5 
+turnOnHeart:
+        MOV.B   #4, &0xA22               ; turn on heart
+        RET
+
+turnOffHeart:
+        MOV.B   #0, &0xA22               ; turn off heart
+        RET
         
 leftButtonPress:
         CMP.B   #2, R4                   ;are we in the read menu?
@@ -172,6 +222,7 @@ leftButtonPress:
         JZ      increasePulse            ;if so, display the heart
 
         JMP      fin
+        
 rightButtonPress:
         CMP.B   #1, R4                   ;are we in the options menu?
         JZ      displayRead              ;if so, display read
@@ -179,53 +230,6 @@ rightButtonPress:
         JZ      displayLog               ;if so, display log
         CMP.B   #3, R4                   ;are we in the log menu?
         JZ      displayRead              ;if so, display read
-
-increaseBars:
-        CMP.B   #00010000B, &0xA31
-        JZ      increaseFirstBar
-        CMP.B   #00000000B, &0xA2D
-        JZ      increaseSecondBar
-        CMP.B   #00110000B, &0xA31
-        JZ      increaseThirdBar
-        CMP.B   #00100000B, &0xA2D
-        JZ      increaseFourthBar
-        CMP.B   #01110000B, &0xA31
-        JZ      increaseFifthBar
-        CMP.B   #01100000B, &0xA2D
-        JZ      increaseSixthBar
-        CMP.B   #11100000B, &0xA2D
-        JZ      increaseFirstBar
-        RETI
-increaseFirstBar:
-        ADD.B   #1, R5
-        MOV.B   #00110000B, &0xA31
-        MOV.B   #00000000B, &0xA2D
-        RETI
-increaseSecondBar:
-        ADD.B   #1, R5
-        MOV.B   #00110000B, &0xA31
-        MOV.B   #00100000B, &0xA2D
-        RETI
-increaseThirdBar:
-        ADD.B   #1, R5
-        MOV.B   #01110000B, &0xA31
-        MOV.B   #00100000B, &0xA2D
-        RETI
-increaseFourthBar:
-        ADD.B   #1, R5
-        MOV.B   #01110000B, &0xA31
-        MOV.B   #01100000B, &0xA2D
-        RETI
-increaseFifthBar:
-        ADD.B   #1, R5
-        MOV.B   #11110000B, &0xA31
-        MOV.B   #01100000B, &0xA2D
-        RETI
-increaseSixthBar:
-        ADD.B   #1, R5
-        MOV.B   #11110000B, &0xA31
-        MOV.B   #11100000B, &0xA2D
-        RETI
 
 fin:
         BIC.B   #00000110B, &P1IFG
