@@ -144,6 +144,22 @@ displayLog:
 
         JMP     fin
         
+displaySave:
+        MOV.W   #2, &LCDCMEMCTL          ; clear lcd memory
+        MOV.B   #6, R4                   ; having 6 in R4 implies that we're in the save menu
+
+        MOV.B   #10110111B, &0xA29       ; display S
+
+        MOV.B   #11101111B, &0xA25       ; display A
+
+        MOV.B   #00001100B, &0xA23       ; display V (opHigh)   
+        MOV.B   #00101000B, &0xA24       ; display V (opLow)
+  
+        MOV.B   #10011111B, &0xA32       ; display E
+        
+        JMP     fin
+        
+        
 calculateAverageBPM:
         PUSH.W  R8
         PUSH.W  R9
@@ -201,7 +217,7 @@ increaseDivResult:
         JMP     divide
         
 startDecode:
-        //push the following registers into the stack to avoid scondary effects
+        //push the following registers into the stack to avoid secondary effects
         MOV.B   #11110001B,&0xA32         ; display B (opHigh)
         MOV.B   #01010000B,&0xA33         ; display B (opLow)
         
@@ -310,6 +326,9 @@ resetBattery:
         MOV.B   #0, R7                  ; R7 reset value
         MOV.B   #48, &0xA31             ; only one battery pile
         MOV.B   #0, &0xA2D              ; no par battery at the moment
+  
+        CMP     #31,&seconds            ;checks if 30 seconds have past
+        JZ      stopPulseMonitor        ;if so, stops the pulse monitor
         RET
 
 checkHeartTime:
@@ -325,11 +344,30 @@ turnOffHeart:
         MOV.B   #0, &0xA22               ; turn off heart
         RET
         
+saveResult:
+        JMP     restartMonitor    ;placeholder para guardar resultados en memoria
+        
+restartMonitor:
+        MOV     #0, &bpm                ;set bpm to 0
+        MOV     #0, &seconds            ;set seconds to 0
+        MOV     #0, &counter            ;set counter to 0
+        
+        JMP     displayOption   ;cuando brinca de aqui se queda estancado en OPTION
+
+stopPulseMonitor:
+        MOV.B   #0, &0xA31              ;turn off battery
+        MOV.B   #8, &0xA22              ;turn on clock
+        XOR   	#CCIE, &TA0CCTL0        ;dectivate timer interrupt
+        MOV     #5, R4                  ;having 5 in R4 means we are in the result menu
+        RETI
+        
 leftButtonPress:
         CMP.B   #2, R4                   ;are we in the read menu?
-        JZ      detectPulse              ;if so, display log
+        JZ      detectPulse              ;if so, start running pulse monitor 
         CMP.B   #4, R4                   ;are we in the pulse menu?
         JZ      increasePulse            ;if so, display the heart
+        CMP.B   #6, R4                   ;are we in save menu?
+        JZ      saveResult               ;if so, save result
 
         JMP      fin
         
@@ -340,10 +378,17 @@ rightButtonPress:
         JZ      displayLog               ;if so, display log
         CMP.B   #3, R4                   ;are we in the log menu?
         JZ      displayRead              ;if so, display read
+        CMP.B   #5, R4                   ;are we displaying result?
+        JZ      displaySave              ;if so, display save
+        CMP.b   #6, R4                   ;are we in save menu?
+        JZ      restartMonitor           ;restart monitor
 
-fin:
-        BIC.B   #00000110B, &P1IFG
-        NOP
-        RETI
+        JMP     fin
         
-        END
+fin:
+        BIC.B   #00000110B, &P1IFG      
+        NOP                             
+        RETI                            
+        
+        END      
+        
