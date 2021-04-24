@@ -330,7 +330,7 @@ resetBattery:
         MOV.B   #48, &0xA31             ; only one battery pile
         MOV.B   #0, &0xA2D              ; no par battery at the moment
   
-        CMP     #31,&seconds            ;checks if 30 seconds have past
+        CMP.B   #31,&seconds            ;checks if 30 seconds have past
         JZ      stopPulseMonitor        ;if so, stops the pulse monitor
         RET
 
@@ -348,21 +348,28 @@ turnOffHeart:
         RET
         
 saveResult:
-        JMP     restartMonitor    ;placeholder para guardar resultados en memoria
+        JMP     restartMonitor          ;placeholder para guardar resultados en memoria
         
 restartMonitor:
-        MOV     #0, &bpm                ;set bpm to 0
-        MOV     #0, &seconds            ;set seconds to 0
-        MOV     #0, &counter            ;set counter to 0
+        MOV.B   #0, &bpm                ;set bpm to 0
+        MOV.B   #0, &seconds            ;set seconds to 0
+        MOV.B   #0, &counter            ;set counter to 0
+
+        MOV.B   #0, R5                  ;reset R5 to default value
+        MOV.B   #16, R6                 ;reset R6 to default value
+        MOV.B   #1, R7                  ;reset R7 to default value
+
         
-        JMP     displayOption   ;cuando brinca de aqui se queda estancado en OPTION
+        CALL    #displayOption          ;display the word OPTIONS
+
+        JMP     fin                     ;clear button flag and return from interrupt
 
 stopPulseMonitor:
         MOV.B   #0, &0xA31              ;turn off battery
         MOV.B   #8, &0xA22              ;turn on clock
-        XOR   	#CCIE, &TA0CCTL0        ;dectivate timer interrupt
-        MOV     #5, R4                  ;having 5 in R4 means we are in the result menu
-        RETI
+        XOR.W   #CCIE, &TA0CCTL0        ;dectivate timer interrupt
+        MOV.B   #5, R4                  ;having 5 in R4 means we are in the result menu
+        RET
         
 leftButtonPress:
         CMP.B   #2, R4                   ;are we in the read menu?
@@ -383,7 +390,7 @@ rightButtonPress:
         JZ      displayRead              ;if so, display read
         CMP.B   #5, R4                   ;are we displaying result?
         JZ      displaySave              ;if so, display save
-        CMP.b   #6, R4                   ;are we in save menu?
+        CMP.B   #6, R4                   ;are we in save menu?
         JZ      restartMonitor           ;restart monitor
 
         JMP     fin
@@ -393,5 +400,4 @@ fin:
         NOP                             
         RETI                            
         
-        END      
-        
+        END    
