@@ -29,6 +29,8 @@ display db      0x09, 0x05, 0x03        ; we're allowed to display a maximum bpm
 ;digits           0       1       2       3       4       5       6       7       8       9
 digitH  db      0xFC,   0x60,   0xDB,   0xF3,   0x67,   0xB7,   0xBF,   0x80,   0xFF,   0xF7
 digitL  db      0x28,   0x20,   0x00,   0x00,   0x00,   0x00,   0x00,   0x28,   0x00,   0x00
+        ALIGN    1
+framAddr dw     001980h,    001982h,    001984h
 
 init:   MOV     #SFE(CSTACK), SP        ; set up stack
         
@@ -346,6 +348,14 @@ turnOffHeart:
         RET
         
 saveResult:
+        PUSH.W    R12
+        MOV.W   #001980h, R12             ; move fram address to empty register
+        
+        MOV.W   0+2(R12), 0+4(R12)      ; store value inside framAddress(1) at address framAddr(2) 
+        MOV.W   0(R12), 0+2(R12)        ; store value inside framAddress(0) at address framAddr(1)
+        MOV.W   R10, 0(R12)             ; store value of bpm at address framAddr(0), this is the new bpm  
+                                        ; reading, it effectively removes the oldest one by replacing it
+        POP     R12
         JMP     restartMonitor          ;placeholder para guardar resultados en memoria
         
 restartMonitor:
@@ -372,12 +382,15 @@ stopPulseMonitor:
 leftButtonPress:
         CMP.B   #2, R4                   ;are we in the read menu?
         JZ      detectPulse              ;if so, start running pulse monitor 
+        CMP.B   #3, R4                   ;are we in the log menu?
+        JZ      displayFram_helper       ;if so, display read bpm's
         CMP.B   #4, R4                   ;are we in the pulse menu?
         JZ      increasePulse            ;if so, display the heart
         CMP.B   #6, R4                   ;are we in save menu?
         JZ      saveResult               ;if so, save result
-
-        JMP      fin
+        CMP.B   #7, R4                   ;are we displaying fram bpm?
+        JZ      displayFram              ;if so we keep displaying fram bpm til it resets
+        JMP     fin
         
 rightButtonPress:
         CMP.B   #1, R4                   ;are we in the options menu?
@@ -393,6 +406,27 @@ rightButtonPress:
 
         JMP     fin
         
+displayFram_helper:
+        MOV.B   #7, R4                   ; having 7 in R4 implies that we're displaying past bpr 
+        PUSH    R11                      ; will be used as a counter for the three bpm in fram
+        MOV.B   #0, R11                  ; start counter at 0
+displayFram:
+        MOV.W   #2, &LCDCMEMCTL           ; clear lcd memory
+        CMP.B   #6, R11                  ; check counter of S1 clicks
+        JZ      clearFramCounter         ; if 3 then exit to options
+        PUSH    R12
+        MOV.W   framAddr(R11), R12       ; move current Fram address to new register
+        MOV.B   0(R12), R10              ; Move pointer of memory to display saved readings (1-3) into current display register
+        INCD    R11                      ; go to next fram address
+        POP     R12
+        CALL    #startDecode             ; display current reading in LCD
+        JMP     fin
+
+clearFramCounter:
+        POP     R11
+        CALL    #displayOption
+        JMP     fin
+       
 fin:
         BIC.B   #00000110B, &P1IFG      
         NOP                             
