@@ -5,16 +5,6 @@
         PUBLIC  main                    ; make the main label visible
                                         ; outside this module
 
-        ORG     1C00h                   ; RAM init
-bpm     db      0x0                     ; initial bpm count
-seconds db      0x0                     ; initial read elapsed seconds       
-counter db      0x0                     ; increase by 1 every 0.1 seconds
-;display values
-display db  0x09, 0x05, 0x03, 0x12, 0x0E, 0x07 
-;digits                   0       1       2       3       4       5       6       7       8       9
-digitH          db      0xFC,   0x60,   0xDB,   0xF3,   0x67,   0xB7,   0xBF,   0x80,   0xFF,   0xF7
-digitL          db      0x28,   0x20,   0x00,   0x00,   0x00,   0x00,   0x00,   0x28,   0x00,   0x00
-
         ORG     0FFE8h                  ; vector for TIMER_A0
         DC16    TIMER_A0_ISR            ; set vector for 'TIMER_A0_ISR' routine
 
@@ -30,12 +20,23 @@ digitL          db      0x28,   0x20,   0x00,   0x00,   0x00,   0x00,   0x00,   
         RSEG    CSTACK                  ; pre-declaration of segment
         RSEG    CODE                    ; place program in 'CODE' segment
 
+        ORG     1C00h                   ; RAM init
+bpm     db      0x0                     ; initial bpm count
+seconds db      0x0                     ; initial read elapsed seconds       
+counter db      0x0                     ; increase by 1 every 0.1 seconds
+;display values
+display db      0x09, 0x05, 0x03        ; we're allowed to display a maximum bpm of three digits
+;digits           0       1       2       3       4       5       6       7       8       9
+digitH  db      0xFC,   0x60,   0xDB,   0xF3,   0x67,   0xB7,   0xBF,   0x80,   0xFF,   0xF7
+digitL  db      0x28,   0x20,   0x00,   0x00,   0x00,   0x00,   0x00,   0x28,   0x00,   0x00
+
 init:   MOV     #SFE(CSTACK), SP        ; set up stack
         
+        //reset the following values since they could have been updated
         MOV.B   #0, &bpm
         MOV.B   #0, &seconds
         MOV.B   #0, &counter
-
+        
 main:   NOP                             ; main program
         MOV.W   #WDTPW+WDTHOLD,&WDTCTL  ; Stop watchdog timer
 
@@ -70,9 +71,6 @@ UnlockGPIO:                                   ;disable the GPIO power-on default
                                         ; activating the GIE. This help to
                                         ; avoid responding to a push on button
                                         ; previous to program start.
-
-        NOP                             ; NOP before setting GIE required by
-                                        ; the architecture
 
         NOP                             ; Wait after setting interrupt bit
 
@@ -231,7 +229,7 @@ startDecode:
         PUSH.B  R9
         PUSH.B  R10
         
-        MOV     #2, R5                    ; 3th index of the display array, let's start showing the decoded value from right to left
+        MOV     #2, R5                    ; 2nd index of the display array, let's start showing the decoded value from right to left
 decodeValue:
         MOV.W   R10, R8                   ; move the result to the numerator (R8 will be used as the numerator to divide)
         MOV.W   #0, R10                   ; R10 will store the division result, right now is 0
@@ -250,8 +248,8 @@ decodeValue:
 
         DEC    R5                         ; pass to the next display
         
-        CMP.B   #0, R5                    ; is the division result == 0?
-        JGE     decodeValue               ; if not, decode the next value
+        CMP.B   #0, R5                    ; is the display index >= 0?
+        JGE     decodeValue               ; if so, decode the next value
         //pop the following registers from the stack to restore their original value
         POP     R10
         POP     R9
